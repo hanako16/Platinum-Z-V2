@@ -1,0 +1,668 @@
+--[[
+    Gatito Hub | The Strongest Battlegrounds
+    Auto Farm - Opera GX Mobile UI
+]]
+
+local Players     = game:GetService("Players")
+local RS          = game:GetService("RunService")
+local TS          = game:GetService("TeleportService")
+local SG          = game:GetService("StarterGui")
+local Stats       = game:GetService("Stats")
+local HttpService = game:GetService("HttpService")
+local Lighting    = game:GetService("Lighting")
+
+local LP = Players.LocalPlayer
+
+-- ============================================================
+-- POTATO GRAPHICS — fast-flag level reduction on execute
+-- ============================================================
+pcall(function()
+    settings().Rendering.QualityLevel           = Enum.QualityLevel.Level01
+    local ok,us = pcall(function() return UserSettings() end)
+    if ok and us then
+        pcall(function() us.GameSettings.SavedQualityLevel = Enum.SavedQualitySetting.QualityLevel1 end)
+    end
+    Lighting.GlobalShadows                      = false
+    Lighting.FogEnd                             = 10000
+    Lighting.FogStart                           = 9999
+    Lighting.Brightness                         = 2
+    Lighting.EnvironmentDiffuseScale            = 0
+    Lighting.EnvironmentSpecularScale           = 0
+    for _, e in ipairs(Lighting:GetChildren()) do pcall(function() e:Destroy() end) end
+    pcall(function()
+        workspace.Terrain.WaterWaveSize     = 0
+        workspace.Terrain.WaterWaveSpeed    = 0
+        workspace.Terrain.WaterReflectance  = 0
+        workspace.Terrain.WaterTransparency = 1
+        workspace.Terrain.Decoration        = false
+    end)
+    local function stripObj(obj)
+        pcall(function()
+            if obj:IsA("ParticleEmitter") then obj.Enabled=false obj.Rate=0
+            elseif obj:IsA("Beam")         then obj.Enabled=false
+            elseif obj:IsA("Trail")        then obj.Enabled=false
+            elseif obj:IsA("BillboardGui") then obj.Enabled=false
+            elseif obj:IsA("SurfaceGui")   then obj.Enabled=false
+            elseif obj:IsA("BasePart")     then obj.CastShadow=false
+            end
+        end)
+    end
+    for _, obj in ipairs(workspace:GetDescendants()) do stripObj(obj) end
+    workspace.DescendantAdded:Connect(stripObj)
+end)
+
+-- ============================================================
+-- STATE
+-- ============================================================
+if getgenv().GatitoHub then
+    pcall(function()
+        if getgenv().GatitoHub.conn then getgenv().GatitoHub.conn:Disconnect() end
+        if getgenv().GatitoHub.gui  then getgenv().GatitoHub.gui:Destroy()     end
+    end)
+end
+getgenv().GatitoHub = {
+    autoFarm       = true,
+    serverHop      = true,
+    kills          = 0,
+    targetKills    = 5,
+    killsSeeded    = false,
+    lastHop        = 0,
+    lastKillCheck  = 0,
+    currentTarget  = nil,
+    finishing      = false,
+    sessionStart   = tick(),
+    conn           = nil,
+    gui            = nil,
+}
+local PZ = getgenv().GatitoHub
+
+-- ============================================================
+-- UTILS
+-- ============================================================
+local function notify(title, text)
+    pcall(function()
+        SG:SetCore("SendNotification",{Title=title or "Gatito Hub",Text=text or "",Duration=2.5})
+    end)
+end
+local function click()
+    pcall(function() if mouse1click then mouse1click() end end)
+end
+local function pressKey(keyName)
+    pcall(function()
+        local key = Enum.KeyCode[keyName]
+        if not key then return end
+        if keypress and keyrelease then
+            keypress(key.Value) task.wait(0.04) keyrelease(key.Value)
+        end
+    end)
+end
+local function getHRP(c) return c and c:FindFirstChild("HumanoidRootPart") end
+local function getHum(c) return c and c:FindFirstChildOfClass("Humanoid")  end
+local function isAlive(c)
+    local h = getHum(c)
+    return h and h.Health > 0 and getHRP(c)
+end
+
+-- ============================================================
+-- AIMLOCK
+-- ============================================================
+local function aimAt(target)
+    if not target then return end
+    local myHRP = getHRP(LP.Character)
+    local tHRP  = getHRP(target.char)
+    if not myHRP or not tHRP then return end
+    local look   = tHRP.CFrame.LookVector
+    local behind = tHRP.Position - look * 4.5 + Vector3.new(0,0.2,0)
+    myHRP.CFrame = CFrame.new(behind, tHRP.Position)
+    pcall(function()
+        local head = target.char:FindFirstChild("Head")
+        if head then
+            workspace.CurrentCamera.CFrame = CFrame.new(
+                workspace.CurrentCamera.CFrame.Position, head.Position)
+        end
+    end)
+end
+
+-- ============================================================
+-- TARGETING
+-- ============================================================
+local RANGE = 280
+local function getAllEnemies()
+    local myHRP = getHRP(LP.Character)
+    if not myHRP then return {} end
+    local list = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LP then continue end
+        local c = plr.Character
+        if not isAlive(c) then continue end
+        local hrp = getHRP(c) local hum = getHum(c)
+        local dist = (myHRP.Position - hrp.Position).Magnitude
+        if dist > RANGE then continue end
+        local maxHP = hum.MaxHealth
+        if maxHP <= 0 then continue end
+        table.insert(list,{player=plr,char=c,hrp=hrp,hum=hum,
+            dist=dist,hpPct=hum.Health/maxHP,hp=hum.Health})
+    end
+    return list
+end
+
+local function pickTarget()
+    local enemies = getAllEnemies()
+    if #enemies == 0 then return nil end
+    if PZ.finishing and PZ.currentTarget then
+        local ct = PZ.currentTarget
+        if isAlive(ct.char) then
+            local hum = getHum(ct.char) local hrp = getHRP(ct.char)
+            if hum and hrp then
+                ct.hp=hum.Health ct.hpPct=hum.Health/math.max(hum.MaxHealth,1) ct.hrp=hrp
+            end
+            return ct
+        else
+            PZ.finishing=false PZ.currentTarget=nil
+        end
+    end
+    local lowTarget,lowestHP,anyTarget,closestD = nil,math.huge,nil,math.huge
+    for _,e in ipairs(enemies) do
+        if e.dist < closestD then closestD=e.dist anyTarget=e end
+        if e.hpPct <= 0.40 and e.hp < lowestHP then lowestHP=e.hp lowTarget=e end
+    end
+    local chosen = lowTarget or anyTarget
+    if chosen then PZ.finishing=true PZ.currentTarget=chosen end
+    return chosen
+end
+
+-- ============================================================
+-- CHARACTER DETECTION
+-- ============================================================
+local function detectCharacter()
+    local char = LP.Character
+    if not char then return "Unknown" end
+    for _,attr in ipairs({"Character","Moveset","SelectedCharacter"}) do
+        local v = char:GetAttribute(attr) or LP:GetAttribute(attr)
+        if typeof(v)=="string" and v~="" then return v end
+    end
+    for _,name in ipairs({"Character","Moveset","SelectedCharacter","CurrentCharacter"}) do
+        local v = char:FindFirstChild(name) or LP:FindFirstChild(name)
+        if v then
+            if v:IsA("StringValue") and v.Value~="" then return v.Value end
+            if v:IsA("ObjectValue") and v.Value then return v.Value.Name end
+        end
+    end
+    local tools={}
+    for _,t in ipairs(char:GetChildren()) do if t:IsA("Tool") then table.insert(tools,t.Name) end end
+    local bp=LP:FindFirstChild("Backpack")
+    if bp then for _,t in ipairs(bp:GetChildren()) do if t:IsA("Tool") then table.insert(tools,t.Name) end end end
+    local ts=table.concat(tools," "):lower()
+    if     ts:find("consecutive") or ts:find("serious")   then return "Saitama"
+    elseif ts:find("flowing")     or ts:find("hunter")    then return "Garou"
+    elseif ts:find("machine gun") or ts:find("ignition")  then return "Genos"
+    elseif ts:find("shuriken")    or ts:find("scatter")   then return "Sonic"
+    elseif ts:find("homerun")     or ts:find("beatdown")  then return "MetalBat"
+    elseif ts:find("atmos")       or ts:find("slice")     then return "Atomic"
+    elseif ts:find("windstorm")   or ts:find("coffin")    then return "Tatsumaki"
+    elseif ts:find("barrage")     or ts:find("vanishing") then return "Suiryu"
+    end
+    return "Unknown"
+end
+
+-- ============================================================
+-- TRUE COMBOS
+-- ============================================================
+local CharCombos = {
+    Saitama = {
+        {type="m1",count=3,wait=0.07},
+        {type="key",key="Four", wait=0.55},
+        {type="key",key="Three",wait=0.50},
+        {type="dash",           wait=0.20},
+        {type="m1",count=3,wait=0.07},
+        {type="key",key="One",  wait=0.45},
+        {type="key",key="Two",  wait=0.65},
+        {type="m1",count=2,wait=0.07},
+    },
+    Garou = {
+        {type="dash",           wait=0.15},
+        {type="m1",count=3,wait=0.07},
+        {type="key",key="One",  wait=0.45},
+        {type="dash",           wait=0.15},
+        {type="key",key="Three",wait=0.50},
+        {type="dash",           wait=0.15},
+        {type="m1",count=3,wait=0.07},
+        {type="key",key="Two",  wait=0.50},
+        {type="key",key="Four", wait=0.40},
+    },
+    Genos = {
+        {type="m1",count=3,wait=0.07},
+        {type="key",key="One",  wait=0.35},
+        {type="key",key="Two",  wait=0.40},
+        {type="dash",           wait=0.15},
+        {type="m1",count=3,wait=0.07},
+        {type="key",key="Four", wait=0.45},
+        {type="key",key="Three",wait=0.40},
+    },
+    Sonic = {
+        {type="m1",count=4,wait=0.07},
+        {type="jump",           wait=0.10},
+        {type="key",key="One",  wait=0.40},
+        {type="m1",count=3,wait=0.07},
+        {type="key",key="Two",  wait=0.40},
+        {type="m1",count=3,wait=0.07},
+        {type="key",key="Four", wait=0.45},
+        {type="key",key="Three",wait=0.40},
+        {type="key",key="One",  wait=0.35},
+    },
+    MetalBat = {
+        {type="dash",           wait=0.15},
+        {type="m1",count=3,wait=0.07},
+        {type="key",key="Three",wait=0.45},
+        {type="key",key="One",  wait=0.50},
+        {type="key",key="Two",  wait=0.50},
+        {type="key",key="Four", wait=0.45},
+        {type="dash",           wait=0.15},
+        {type="m1",count=3,wait=0.07},
+        {type="key",key="Four", wait=0.45},
+    },
+    Atomic = {
+        {type="dash",           wait=0.15},
+        {type="m1",count=3,wait=0.07},
+        {type="key",key="Four", wait=0.45},
+        {type="key",key="One",  wait=0.45},
+        {type="key",key="Two",  wait=0.40},
+        {type="dash",           wait=0.15},
+        {type="m1",count=3,wait=0.07},
+        {type="key",key="Three",wait=0.40},
+    },
+    Tatsumaki = {
+        {type="m1",count=3,wait=0.07},
+        {type="key",key="Four", wait=0.45},
+        {type="key",key="One",  wait=0.50},
+        {type="m1",count=3,wait=0.07},
+        {type="key",key="Four", wait=0.45},
+        {type="key",key="Two",  wait=0.55},
+        {type="m1",count=3,wait=0.07},
+        {type="key",key="Three",wait=0.40},
+    },
+    Suiryu = {
+        {type="m1",count=3,wait=0.07},
+        {type="key",key="Four", wait=0.45},
+        {type="key",key="One",  wait=0.50},
+        {type="key",key="Two",  wait=0.35},
+        {type="key",key="Two",  wait=0.35},
+        {type="key",key="Four", wait=0.45},
+        {type="key",key="Three",wait=0.40},
+    },
+    Unknown = {
+        {type="m1",count=3,wait=0.07},
+        {type="key",key="One",  wait=0.45},
+        {type="m1",count=2,wait=0.07},
+        {type="key",key="Two",  wait=0.45},
+        {type="m1",count=2,wait=0.07},
+        {type="key",key="Three",wait=0.45},
+        {type="m1",count=2,wait=0.07},
+        {type="key",key="Four", wait=0.45},
+    },
+}
+
+local abilityCooldowns = {One=0,Two=0,Three=0,Four=0}
+local ABILITY_CD       = 0.9
+local currentChar      = "Unknown"
+local lastCharCheck    = 0
+
+local function getActiveCombo()
+    if tick()-lastCharCheck > 3 then
+        lastCharCheck = tick()
+        currentChar   = detectCharacter()
+    end
+    return CharCombos[currentChar] or CharCombos["Unknown"]
+end
+
+local comboRunning = false
+local function runCombo()
+    if comboRunning then return end
+    comboRunning = true
+    task.spawn(function()
+        for _,step in ipairs(getActiveCombo()) do
+            if step.type=="m1" then
+                for i=1,step.count do click() task.wait(step.wait) end
+            elseif step.type=="key" then
+                local now=tick()
+                if now-(abilityCooldowns[step.key] or 0)>=ABILITY_CD then
+                    pressKey(step.key) abilityCooldowns[step.key]=now
+                end
+                task.wait(step.wait)
+            elseif step.type=="dash" then
+                pressKey("Q") task.wait(step.wait)
+            elseif step.type=="jump" then
+                pressKey("Space") task.wait(step.wait)
+            end
+        end
+        task.wait(0.08)
+        comboRunning = false
+    end)
+end
+
+-- ============================================================
+-- KILL TRACKING
+-- ============================================================
+local lastKnownKills = 0
+local function updateKills()
+    local ls = LP:FindFirstChild("leaderstats")
+    if not ls then return end
+    local kv = ls:FindFirstChild("Kills") or ls:FindFirstChild("kills") or ls:FindFirstChild("Kill")
+    if not kv then return end
+    if not (kv:IsA("IntValue") or kv:IsA("NumberValue")) then return end
+    local current = kv.Value
+    if not PZ.killsSeeded then lastKnownKills=current PZ.killsSeeded=true return end
+    if current > lastKnownKills then
+        local gained=current-lastKnownKills
+        PZ.kills=PZ.kills+gained lastKnownKills=current
+        notify("Gatito Hub","Kill +"..gained.." | Session: "..PZ.kills)
+        PZ.finishing=false PZ.currentTarget=nil
+    end
+end
+
+-- ============================================================
+-- SERVER HOP
+-- ============================================================
+local function serverHop()
+    if tick()-PZ.lastHop < 8 then return end
+    PZ.lastHop=tick()
+    notify("Gatito Hub","Hopping after "..PZ.kills.." kills...")
+    PZ.kills=0 PZ.killsSeeded=false PZ.finishing=false PZ.currentTarget=nil
+    pcall(function()
+        local pid=game.PlaceId local servers={}
+        local req=game:HttpGet("https://games.roblox.com/v1/games/"..pid.."/servers/Public?sortOrder=Asc&limit=100")
+        local data=HttpService:JSONDecode(req)
+        if data and data.data then
+            for _,s in ipairs(data.data) do
+                if s.playing and s.playing<s.maxPlayers and s.id~=game.JobId then
+                    table.insert(servers,s.id)
+                end
+            end
+        end
+        if #servers>0 then TS:TeleportToPlaceInstance(pid,servers[math.random(1,#servers)],LP)
+        else TS:Teleport(pid,LP) end
+    end)
+end
+
+-- ============================================================
+-- MAIN LOOP
+-- ============================================================
+LP.CharacterAdded:Connect(function()
+    task.wait(0.6)
+    PZ.killsSeeded=false PZ.finishing=false PZ.currentTarget=nil
+end)
+
+local function mainLoop()
+    if not PZ.autoFarm then return end
+    local myChar=LP.Character
+    if not myChar then return end
+    local myHum=getHum(myChar)
+    if not myHum or myHum.Health<=0 then return end
+    local target=pickTarget()
+    if target then
+        aimAt(target)
+        if not comboRunning then runCombo() end
+    end
+    if tick()-PZ.lastKillCheck > 1.0 then
+        PZ.lastKillCheck=tick()
+        updateKills()
+        if PZ.serverHop and PZ.kills>=PZ.targetKills then serverHop() end
+    end
+end
+
+PZ.conn = RS.Heartbeat:Connect(function() pcall(mainLoop) end)
+
+-- ============================================================
+-- GUI — Opera GX Mobile style
+-- ============================================================
+local gui = Instance.new("ScreenGui")
+gui.Name           = "GatitoHub"
+gui.ResetOnSpawn   = false
+gui.IgnoreGuiInset = true
+gui.DisplayOrder   = 999
+pcall(function() gui.Parent = LP:WaitForChild("PlayerGui") end)
+PZ.gui = gui
+
+-- Measurements
+local W,H = 340, 400
+
+-- Main card
+local card = Instance.new("Frame")
+card.Name             = "Card"
+card.Size             = UDim2.new(0,W,0,H)
+card.Position         = UDim2.new(0.5,-W/2,0.5,-H/2)
+card.BackgroundColor3 = Color3.fromRGB(13,12,18)
+card.BackgroundTransparency = 0.12
+card.BorderSizePixel  = 0
+card.Active           = true
+card.Draggable        = true
+card.Parent           = gui
+local cardC = Instance.new("UICorner") cardC.CornerRadius=UDim.new(0,12) cardC.Parent=card
+local cardS = Instance.new("UIStroke") cardS.Color=Color3.fromRGB(0,200,80) cardS.Thickness=2.2 cardS.Parent=card
+
+-- Card background image (rectangle)
+local cardBg = Instance.new("ImageLabel")
+cardBg.Name                 = "CardBg"
+cardBg.Size                 = UDim2.new(1,0,1,0)
+cardBg.Position             = UDim2.new(0,0,0,0)
+cardBg.BackgroundTransparency = 1
+cardBg.BorderSizePixel      = 0
+cardBg.Image                = "rbxassetid://6675147490"
+cardBg.ScaleType            = Enum.ScaleType.Crop
+cardBg.ImageTransparency    = 0.15
+cardBg.ZIndex               = 0
+cardBg.Parent               = card
+local cardBgC = Instance.new("UICorner") cardBgC.CornerRadius=UDim.new(0,12) cardBgC.Parent=cardBg
+-- fallback if assetid fails to paint
+task.defer(function()
+    if cardBg.IsLoaded == false or cardBg.Image == "" then
+        cardBg.Image = "rbxthumb://type=Asset&id=6675147490&w=420&h=420"
+    end
+end)
+
+-- Top notch bar (Opera GX green accent at top)
+local notch = Instance.new("Frame")
+notch.Size             = UDim2.new(0,60,0,5)
+notch.Position         = UDim2.new(0.5,-30,0,-2)
+notch.BackgroundColor3 = Color3.fromRGB(0,200,80)
+notch.BorderSizePixel  = 0
+notch.Parent           = card
+local notchC = Instance.new("UICorner") notchC.CornerRadius=UDim.new(0,4) notchC.Parent=notch
+
+-- ── Header area — cat picture as background ──────────────────
+local headerBg = Instance.new("Frame")
+headerBg.Size             = UDim2.new(1,0,0,130)
+headerBg.Position         = UDim2.new(0,0,0,0)
+headerBg.BackgroundColor3 = Color3.fromRGB(18,16,26)
+headerBg.BackgroundTransparency = 0.35
+headerBg.BorderSizePixel  = 0
+headerBg.ClipsDescendants = true
+headerBg.ZIndex             = 1
+headerBg.Parent           = card
+local headerBgC = Instance.new("UICorner") headerBgC.CornerRadius=UDim.new(0,12) headerBgC.Parent=headerBg
+-- Square bottom corners on header
+local headerFix = Instance.new("Frame")
+headerFix.Size=UDim2.new(1,0,0,22) headerFix.Position=UDim2.new(0,0,1,-22)
+headerFix.BackgroundColor3=Color3.fromRGB(18,16,26) headerFix.BackgroundTransparency=0.35 headerFix.BorderSizePixel=0 headerFix.Parent=headerBg
+
+-- Script logo
+local logo = Instance.new("ImageLabel")
+logo.Size                   = UDim2.new(0,88,0,88)
+logo.Position               = UDim2.new(0.5,-44,0,14)
+logo.BackgroundTransparency = 1
+logo.Image                  = "rbxthumb://type=Asset&id=11176073582&w=150&h=150"
+logo.ScaleType              = Enum.ScaleType.Fit
+logo.ImageTransparency      = 0
+logo.ZIndex                 = 2
+logo.Parent                 = headerBg
+
+-- Site lock icon (🔒 style — small green dot)
+local lockDot = Instance.new("Frame")
+lockDot.Size=UDim2.new(0,8,0,8) lockDot.Position=UDim2.new(0.5,-38,1,-28)
+lockDot.BackgroundColor3=Color3.fromRGB(0,200,80) lockDot.BorderSizePixel=0 lockDot.Parent=headerBg
+local lockC=Instance.new("UICorner") lockC.CornerRadius=UDim.new(1,0) lockC.Parent=lockDot
+
+-- Site title
+local siteTitle = Instance.new("TextLabel")
+siteTitle.Size=UDim2.new(1,-20,0,22) siteTitle.Position=UDim2.new(0,10,1,-44)
+siteTitle.BackgroundTransparency=1 siteTitle.Text="GATITO HUB"
+siteTitle.TextColor3=Color3.fromRGB(255,255,255) siteTitle.Font=Enum.Font.GothamBold
+siteTitle.TextSize=15 siteTitle.TextXAlignment=Enum.TextXAlignment.Center siteTitle.Parent=headerBg
+
+-- Secure tag
+local secureTag = Instance.new("TextLabel")
+secureTag.Size=UDim2.new(1,-20,0,16) secureTag.Position=UDim2.new(0,10,1,-24)
+secureTag.BackgroundTransparency=1 secureTag.Text="Your connection is secure"
+secureTag.TextColor3=Color3.fromRGB(140,140,160) secureTag.Font=Enum.Font.Gotham
+secureTag.TextSize=11 secureTag.TextXAlignment=Enum.TextXAlignment.Center secureTag.Parent=headerBg
+
+-- ── Nav button row ────────────────────────────────────────────
+local navRow = Instance.new("Frame")
+navRow.Size=UDim2.new(1,-24,0,52) navRow.Position=UDim2.new(0,12,0,138)
+navRow.BackgroundTransparency=1 navRow.Parent=card
+
+local navButtons = {
+    {icon="←", tip="Back"},
+    {icon="→", tip="Forward"},
+    {icon="↺", tip="Reload"},
+    {icon="⇪", tip="Share"},
+    {icon="♡", tip="Favourite"},
+}
+local navBtnW = (W-24-8*4)/5
+for i,nb in ipairs(navButtons) do
+    local btn = Instance.new("TextButton")
+    btn.Size=UDim2.new(0,navBtnW,0,46) btn.Position=UDim2.new(0,(navBtnW+8)*(i-1),0,0)
+    btn.BackgroundColor3=Color3.fromRGB(28,24,42) btn.Text=nb.icon
+    btn.TextColor3=Color3.fromRGB(210,200,240) btn.Font=Enum.Font.GothamBold
+    btn.TextSize=18 btn.BorderSizePixel=0 btn.Parent=navRow
+    local bc=Instance.new("UICorner") bc.CornerRadius=UDim.new(0,10) bc.Parent=btn
+end
+
+-- ── Divider ───────────────────────────────────────────────────
+local div = Instance.new("Frame")
+div.Size=UDim2.new(1,-24,0,1) div.Position=UDim2.new(0,12,0,196)
+div.BackgroundColor3=Color3.fromRGB(38,35,55) div.BorderSizePixel=0 div.Parent=card
+
+-- ── Toggle factory — Opera GX style ─────────────────────────
+local function makeToggle(yPos, labelText, defaultOn, callback)
+    local row = Instance.new("Frame")
+    row.Size=UDim2.new(1,-24,0,52) row.Position=UDim2.new(0,12,0,yPos)
+    row.BackgroundTransparency=1 row.Parent=card
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size=UDim2.new(1,-74,1,0) lbl.Position=UDim2.new(0,0,0,0)
+    lbl.BackgroundTransparency=1 lbl.Text=labelText
+    lbl.TextColor3=Color3.fromRGB(240,240,240) lbl.Font=Enum.Font.GothamBold
+    lbl.TextSize=15 lbl.TextXAlignment=Enum.TextXAlignment.Left lbl.Parent=row
+
+    -- Pill
+    local pill = Instance.new("Frame")
+    pill.Size=UDim2.new(0,56,0,30) pill.Position=UDim2.new(1,-56,0.5,-15)
+    pill.BackgroundColor3 = defaultOn and Color3.fromRGB(0,180,70) or Color3.fromRGB(55,52,72)
+    pill.BorderSizePixel=0 pill.Parent=row
+    local pillC=Instance.new("UICorner") pillC.CornerRadius=UDim.new(1,0) pillC.Parent=pill
+
+    -- Knob
+    local knob = Instance.new("Frame")
+    knob.Size=UDim2.new(0,24,0,24)
+    knob.Position = defaultOn and UDim2.new(0,29,0,3) or UDim2.new(0,3,0,3)
+    knob.BackgroundColor3=Color3.fromRGB(255,255,255) knob.BorderSizePixel=0 knob.Parent=pill
+    local knobC=Instance.new("UICorner") knobC.CornerRadius=UDim.new(1,0) knobC.Parent=knob
+
+    -- Click region over pill
+    local btn = Instance.new("TextButton")
+    btn.Size=UDim2.new(0,56,0,30) btn.Position=UDim2.new(1,-56,0.5,-15)
+    btn.BackgroundTransparency=1 btn.Text="" btn.Parent=row
+
+    local state = defaultOn
+    btn.MouseButton1Click:Connect(function()
+        state = not state
+        pill.BackgroundColor3 = state and Color3.fromRGB(0,180,70) or Color3.fromRGB(55,52,72)
+        knob.Position         = state and UDim2.new(0,29,0,3) or UDim2.new(0,3,0,3)
+        callback(state)
+    end)
+end
+
+makeToggle(204, "Auto Farm Kills", true, function(on)
+    PZ.autoFarm = on
+    notify("Gatito Hub", "Auto Farm: "..(on and "ON" or "OFF"))
+end)
+
+-- Divider between toggles
+local div2 = Instance.new("Frame")
+div2.Size=UDim2.new(1,-24,0,1) div2.Position=UDim2.new(0,12,0,261)
+div2.BackgroundColor3=Color3.fromRGB(38,35,55) div2.BorderSizePixel=0 div2.Parent=card
+
+makeToggle(268, "Server Hop", true, function(on)
+    PZ.serverHop = on
+    notify("Gatito Hub", "Server Hop: "..(on and "ON" or "OFF"))
+end)
+
+-- ── Bottom divider + footer stats ────────────────────────────
+local div3 = Instance.new("Frame")
+div3.Size=UDim2.new(1,-24,0,1) div3.Position=UDim2.new(0,12,0,328)
+div3.BackgroundColor3=Color3.fromRGB(38,35,55) div3.BorderSizePixel=0 div3.Parent=card
+
+local pingLbl = Instance.new("TextLabel")
+pingLbl.Size=UDim2.new(0.5,-16,0,28) pingLbl.Position=UDim2.new(0,12,0,335)
+pingLbl.BackgroundTransparency=1 pingLbl.Text="Ping: --ms"
+pingLbl.TextColor3=Color3.fromRGB(120,120,140) pingLbl.Font=Enum.Font.Gotham
+pingLbl.TextSize=12 pingLbl.TextXAlignment=Enum.TextXAlignment.Left pingLbl.Parent=card
+
+local fpsLbl = Instance.new("TextLabel")
+fpsLbl.Size=UDim2.new(0.5,-16,0,28) fpsLbl.Position=UDim2.new(0.5,4,0,335)
+fpsLbl.BackgroundTransparency=1 fpsLbl.Text="FPS: --"
+fpsLbl.TextColor3=Color3.fromRGB(120,120,140) fpsLbl.Font=Enum.Font.Gotham
+fpsLbl.TextSize=12 fpsLbl.TextXAlignment=Enum.TextXAlignment.Right fpsLbl.Parent=card
+
+local killLbl = Instance.new("TextLabel")
+killLbl.Size=UDim2.new(1,-24,0,24) killLbl.Position=UDim2.new(0,12,0,360)
+killLbl.BackgroundTransparency=1 killLbl.Text="Session kills: 0"
+killLbl.TextColor3=Color3.fromRGB(100,100,120) killLbl.Font=Enum.Font.Gotham
+killLbl.TextSize=11 killLbl.TextXAlignment=Enum.TextXAlignment.Center killLbl.Parent=card
+
+-- Live stats updater
+local lastFPSTime = tick()
+local frameCount  = 0
+RS.Heartbeat:Connect(function()
+    pcall(function()
+        frameCount = frameCount+1
+        local now  = tick()
+        if now-lastFPSTime >= 1 then
+            local fps   = math.floor(frameCount/(now-lastFPSTime))
+            frameCount  = 0
+            lastFPSTime = now
+            local ping  = 0
+            pcall(function()
+                ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue())
+            end)
+            local pCol = ping<80 and Color3.fromRGB(0,200,80)
+                or ping<160 and Color3.fromRGB(220,180,50)
+                or Color3.fromRGB(220,70,70)
+            local fCol = fps>=50 and Color3.fromRGB(0,200,80)
+                or fps>=25 and Color3.fromRGB(220,180,50)
+                or Color3.fromRGB(220,70,70)
+            pingLbl.Text=("Ping: %dms"):format(ping) pingLbl.TextColor3=pCol
+            fpsLbl.Text=("FPS: %d"):format(fps)      fpsLbl.TextColor3=fCol
+            killLbl.Text="Session kills: "..PZ.kills
+        end
+    end)
+end)
+
+notify("Gatito Hub", "😺 Auto farming active!")
+
+-- Chat load message
+pcall(function()
+    local TextChat = game:GetService("TextChatService")
+    local channels = TextChat:FindFirstChild("TextChannels")
+    local channel = channels and (channels:FindFirstChild("RBXGeneral") or channels:FindFirstChild("RBXSystem"))
+    if channel and channel.SendAsync then
+        channel:SendAsync("Gatito Hub Loaded|TSB Auto Kill")
+    else
+        local RS = game:GetService("ReplicatedStorage")
+        local rem = RS:FindFirstChild("DefaultChatSystemChatEvents")
+        if rem and rem:FindFirstChild("SayMessageRequest") then
+            rem.SayMessageRequest:FireServer("Gatito Hub Loaded|TSB Auto Kill", "All")
+        end
+    end
+end)
