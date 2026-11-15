@@ -1,133 +1,183 @@
 --[[
-    Gatito Hub | The Strongest Battlegrounds
-    Auto Farm - Opera GX Mobile UI
+    Gatito Hub By @Hanako899 (on YT)
+    Custom black + RGB border · mobile/PC · low-HP farm
+    kanha@#9002111185000#
 ]]
 
-local Players     = game:GetService("Players")
-local RS          = game:GetService("RunService")
-local TS          = game:GetService("TeleportService")
-local SG          = game:GetService("StarterGui")
-local Stats       = game:GetService("Stats")
-local HttpService = game:GetService("HttpService")
-local Lighting    = game:GetService("Lighting")
+local Players      = game:GetService("Players")
+local RS           = game:GetService("RunService")
+local TS           = game:GetService("TeleportService")
+local HttpService  = game:GetService("HttpService")
+local Lighting     = game:GetService("Lighting")
+local UIS          = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local VIM          = game:GetService("VirtualInputManager")
 
 local LP = Players.LocalPlayer
+local Cam = workspace.CurrentCamera
+local UserSettings = UserSettings()
 
--- ============================================================
--- POTATO GRAPHICS — fast-flag level reduction on execute
--- ============================================================
-pcall(function()
-    settings().Rendering.QualityLevel           = Enum.QualityLevel.Level01
-    local ok,us = pcall(function() return UserSettings() end)
-    if ok and us then
-        pcall(function() us.GameSettings.SavedQualityLevel = Enum.SavedQualitySetting.QualityLevel1 end)
-    end
-    Lighting.GlobalShadows                      = false
-    Lighting.FogEnd                             = 10000
-    Lighting.FogStart                           = 9999
-    Lighting.Brightness                         = 2
-    Lighting.EnvironmentDiffuseScale            = 0
-    Lighting.EnvironmentSpecularScale           = 0
-    for _, e in ipairs(Lighting:GetChildren()) do pcall(function() e:Destroy() end) end
+-- cleanup old
+if getgenv().GatitoTSB then
     pcall(function()
-        workspace.Terrain.WaterWaveSize     = 0
-        workspace.Terrain.WaterWaveSpeed    = 0
-        workspace.Terrain.WaterReflectance  = 0
-        workspace.Terrain.WaterTransparency = 1
-        workspace.Terrain.Decoration        = false
-    end)
-    local function stripObj(obj)
-        pcall(function()
-            if obj:IsA("ParticleEmitter") then obj.Enabled=false obj.Rate=0
-            elseif obj:IsA("Beam")         then obj.Enabled=false
-            elseif obj:IsA("Trail")        then obj.Enabled=false
-            elseif obj:IsA("BillboardGui") then obj.Enabled=false
-            elseif obj:IsA("SurfaceGui")   then obj.Enabled=false
-            elseif obj:IsA("BasePart")     then obj.CastShadow=false
-            end
-        end)
-    end
-    for _, obj in ipairs(workspace:GetDescendants()) do stripObj(obj) end
-    workspace.DescendantAdded:Connect(stripObj)
-end)
-
--- ============================================================
--- STATE
--- ============================================================
-if getgenv().GatitoHub then
-    pcall(function()
-        if getgenv().GatitoHub.conn then getgenv().GatitoHub.conn:Disconnect() end
-        if getgenv().GatitoHub.gui  then getgenv().GatitoHub.gui:Destroy()     end
+        local o = getgenv().GatitoTSB
+        if o.conn then o.conn:Disconnect() end
+        if o.rgbConn then o.rgbConn:Disconnect() end
+        if o.espFolder then o.espFolder:Destroy() end
+        if o.gui then o.gui:Destroy() end
+        if o.notifGui then o.notifGui:Destroy() end
     end)
 end
-getgenv().GatitoHub = {
-    autoFarm       = true,
-    serverHop      = true,
-    kills          = 0,
-    targetKills    = 5,
-    killsSeeded    = false,
-    lastHop        = 0,
-    lastKillCheck  = 0,
-    currentTarget  = nil,
-    finishing      = false,
-    sessionStart   = tick(),
-    conn           = nil,
-    gui            = nil,
+
+getgenv().GatitoTSB = {
+    farming       = false,
+    hopWait       = 30,
+    lowHpPct      = 0.55,
+    stickDist     = 2.5,
+    range         = 400,
+    lastHop       = 0,
+    noLowSince    = tick(),
+    currentTarget = nil,
+    kills         = 0,
+    startTime     = tick(),
+    conn          = nil,
+    rgbConn       = nil,
+    espFolder     = nil,
+    highlights    = {},
+    gui           = nil,
+    notifGui      = nil,
+    open          = false,
 }
-local PZ = getgenv().GatitoHub
+local S = getgenv().GatitoTSB
 
--- ============================================================
--- UTILS
--- ============================================================
-local function notify(title, text)
+local CONFIG_FILE = "GatitoHub_TSB_Config.json"
+
+local function saveConfig()
     pcall(function()
-        SG:SetCore("SendNotification",{Title=title or "Gatito Hub",Text=text or "",Duration=2.5})
-    end)
-end
-local function click()
-    pcall(function() if mouse1click then mouse1click() end end)
-end
-local function pressKey(keyName)
-    pcall(function()
-        local key = Enum.KeyCode[keyName]
-        if not key then return end
-        if keypress and keyrelease then
-            keypress(key.Value) task.wait(0.04) keyrelease(key.Value)
+        local data = {
+            farming   = S.farming,
+            hopWait   = S.hopWait,
+            lowHpPct  = S.lowHpPct,
+            stickDist = S.stickDist,
+        }
+        if writefile then
+            writefile(CONFIG_FILE, HttpService:JSONEncode(data))
         end
     end)
 end
+
+local function loadConfig()
+    pcall(function()
+        if not isfile or not isfile(CONFIG_FILE) then return end
+        local raw = readfile(CONFIG_FILE)
+        local data = HttpService:JSONDecode(raw)
+        if type(data) ~= "table" then return end
+        if data.farming ~= nil then S.farming = data.farming end
+        if data.hopWait then S.hopWait = data.hopWait end
+        if data.lowHpPct then S.lowHpPct = data.lowHpPct end
+        if data.stickDist then S.stickDist = data.stickDist end
+    end)
+end
+loadConfig()
+
+-- ============================================================
+-- GRAPHICS CRUSH
+-- ============================================================
+pcall(function()
+    settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+    UserSettings.GameSettings.SavedQualityLevel = Enum.SavedQualitySetting.QualityLevel1
+    Lighting.GlobalShadows = false
+    Lighting.FogEnd = 9e9
+    Lighting.FogStart = 9e9
+    Lighting.Brightness = 1
+    Lighting.EnvironmentDiffuseScale = 0
+    Lighting.EnvironmentSpecularScale = 0
+    pcall(function() Lighting.Technology = Enum.Technology.Legacy end)
+    for _, e in ipairs(Lighting:GetChildren()) do
+        if e:IsA("PostEffect") or e:IsA("BloomEffect") or e:IsA("BlurEffect")
+            or e:IsA("ColorCorrectionEffect") or e:IsA("SunRaysEffect")
+            or e:IsA("DepthOfFieldEffect") then
+            pcall(function() e:Destroy() end)
+        end
+    end
+    pcall(function()
+        workspace.Terrain.WaterWaveSize = 0
+        workspace.Terrain.WaterWaveSpeed = 0
+        workspace.Terrain.WaterReflectance = 0
+        workspace.Terrain.WaterTransparency = 1
+        workspace.Terrain.Decoration = false
+    end)
+    local function strip(obj)
+        pcall(function()
+            if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam") then
+                obj.Enabled = false
+                if obj:IsA("ParticleEmitter") then obj.Rate = 0 end
+            elseif obj:IsA("BasePart") then
+                obj.CastShadow = false
+                obj.Material = Enum.Material.SmoothPlastic
+                if obj.Reflectance > 0 then obj.Reflectance = 0 end
+            elseif obj:IsA("Decal") or obj:IsA("Texture") then
+                obj.Transparency = 1
+            end
+        end)
+    end
+    for _, obj in ipairs(workspace:GetDescendants()) do strip(obj) end
+    workspace.DescendantAdded:Connect(strip)
+end)
+
+-- ============================================================
+-- COMBAT (no mouse cursor spam — camera aim + keys + tool)
+-- ============================================================
 local function getHRP(c) return c and c:FindFirstChild("HumanoidRootPart") end
-local function getHum(c) return c and c:FindFirstChildOfClass("Humanoid")  end
+local function getHum(c) return c and c:FindFirstChildOfClass("Humanoid") end
 local function isAlive(c)
     local h = getHum(c)
     return h and h.Health > 0 and getHRP(c)
 end
 
--- ============================================================
--- AIMLOCK
--- ============================================================
-local function aimAt(target)
-    if not target then return end
-    local myHRP = getHRP(LP.Character)
-    local tHRP  = getHRP(target.char)
-    if not myHRP or not tHRP then return end
-    local look   = tHRP.CFrame.LookVector
-    local behind = tHRP.Position - look * 4.5 + Vector3.new(0,0.2,0)
-    myHRP.CFrame = CFrame.new(behind, tHRP.Position)
+local function pressKey(keyName)
     pcall(function()
-        local head = target.char:FindFirstChild("Head")
-        if head then
-            workspace.CurrentCamera.CFrame = CFrame.new(
-                workspace.CurrentCamera.CFrame.Position, head.Position)
+        local key = Enum.KeyCode[keyName]
+        if keyName == "Space" then key = Enum.KeyCode.Space
+        elseif keyName == "Q" then key = Enum.KeyCode.Q
+        elseif keyName == "G" then key = Enum.KeyCode.G
+        end
+        if not key then return end
+        if keypress and keyrelease then
+            keypress(key.Value); task.wait(0.03); keyrelease(key.Value)
+        else
+            VIM:SendKeyEvent(true, key, false, game)
+            task.wait(0.03)
+            VIM:SendKeyEvent(false, key, false, game)
         end
     end)
 end
 
--- ============================================================
--- TARGETING
--- ============================================================
-local RANGE = 280
-local function getAllEnemies()
+local function doM1()
+    -- NO mouse button events (removes cursor spam / menu opens)
+    -- Tool activate + ability keys only; camera aims at target
+    pcall(function()
+        local char = LP.Character
+        if not char then return end
+        local tool = char:FindFirstChildOfClass("Tool")
+        if tool then tool:Activate() end
+    end)
+end
+
+local function aimStick(target)
+    if not target then return end
+    local myHRP = getHRP(LP.Character)
+    local tHRP = getHRP(target.char)
+    if not myHRP or not tHRP then return end
+    local behind = tHRP.Position - tHRP.CFrame.LookVector * S.stickDist + Vector3.new(0, 0.1, 0)
+    myHRP.CFrame = CFrame.new(behind, tHRP.Position)
+    -- auto aim camera (no mouse)
+    pcall(function()
+        Cam.CFrame = CFrame.new(Cam.CFrame.Position, tHRP.Position)
+    end)
+end
+
+local function getLowHpEnemies()
     local myHRP = getHRP(LP.Character)
     if not myHRP then return {} end
     local list = {}
@@ -135,534 +185,665 @@ local function getAllEnemies()
         if plr == LP then continue end
         local c = plr.Character
         if not isAlive(c) then continue end
-        local hrp = getHRP(c) local hum = getHum(c)
-        local dist = (myHRP.Position - hrp.Position).Magnitude
-        if dist > RANGE then continue end
+        local hum = getHum(c)
+        local hrp = getHRP(c)
         local maxHP = hum.MaxHealth
         if maxHP <= 0 then continue end
-        table.insert(list,{player=plr,char=c,hrp=hrp,hum=hum,
-            dist=dist,hpPct=hum.Health/maxHP,hp=hum.Health})
+        local pct = hum.Health / maxHP
+        if pct > S.lowHpPct then continue end
+        local dist = (myHRP.Position - hrp.Position).Magnitude
+        if dist > S.range then continue end
+        table.insert(list, {
+            player = plr, char = c, hum = hum, hrp = hrp,
+            hp = hum.Health, hpPct = pct, dist = dist, userid = plr.UserId,
+        })
     end
+    table.sort(list, function(a, b) return a.hp < b.hp end)
     return list
 end
 
 local function pickTarget()
-    local enemies = getAllEnemies()
-    if #enemies == 0 then return nil end
-    if PZ.finishing and PZ.currentTarget then
-        local ct = PZ.currentTarget
-        if isAlive(ct.char) then
-            local hum = getHum(ct.char) local hrp = getHRP(ct.char)
-            if hum and hrp then
-                ct.hp=hum.Health ct.hpPct=hum.Health/math.max(hum.MaxHealth,1) ct.hrp=hrp
+    local list = getLowHpEnemies()
+    if S.currentTarget then
+        local ct = S.currentTarget
+        for _, e in ipairs(list) do
+            if e.userid == ct.userid and e.hp > 0 then
+                ct.char = e.char; ct.hum = e.hum; ct.hrp = e.hrp
+                ct.hp = e.hp; ct.hpPct = e.hpPct; ct.dist = e.dist
+                return ct
             end
-            return ct
+        end
+        S.currentTarget = nil
+    end
+    if #list == 0 then return nil end
+    S.currentTarget = list[1]
+    S.noLowSince = tick()
+    return S.currentTarget
+end
+
+-- ESP
+S.espFolder = Instance.new("Folder")
+S.espFolder.Name = "GatitoLowHpESP"
+pcall(function() S.espFolder.Parent = game:GetService("CoreGui") end)
+if not S.espFolder.Parent then S.espFolder.Parent = LP:WaitForChild("PlayerGui") end
+
+local function clearEsp()
+    for uid, h in pairs(S.highlights) do
+        pcall(function() h:Destroy() end)
+        S.highlights[uid] = nil
+    end
+end
+
+local function updateEsp()
+    local low = getLowHpEnemies()
+    local alive = {}
+    for _, e in ipairs(low) do
+        alive[e.userid] = true
+        if not S.highlights[e.userid] or not S.highlights[e.userid].Parent then
+            local hl = Instance.new("Highlight")
+            hl.Name = "GatitoRed_" .. e.userid
+            hl.Adornee = e.char
+            hl.FillColor = Color3.fromRGB(255, 40, 40)
+            hl.OutlineColor = Color3.fromRGB(255, 80, 80)
+            hl.FillTransparency = 0.45
+            hl.OutlineTransparency = 0.1
+            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            hl.Parent = S.espFolder
+            S.highlights[e.userid] = hl
         else
-            PZ.finishing=false PZ.currentTarget=nil
+            S.highlights[e.userid].Adornee = e.char
         end
     end
-    local lowTarget,lowestHP,anyTarget,closestD = nil,math.huge,nil,math.huge
-    for _,e in ipairs(enemies) do
-        if e.dist < closestD then closestD=e.dist anyTarget=e end
-        if e.hpPct <= 0.40 and e.hp < lowestHP then lowestHP=e.hp lowTarget=e end
-    end
-    local chosen = lowTarget or anyTarget
-    if chosen then PZ.finishing=true PZ.currentTarget=chosen end
-    return chosen
-end
-
--- ============================================================
--- CHARACTER DETECTION
--- ============================================================
-local function detectCharacter()
-    local char = LP.Character
-    if not char then return "Unknown" end
-    for _,attr in ipairs({"Character","Moveset","SelectedCharacter"}) do
-        local v = char:GetAttribute(attr) or LP:GetAttribute(attr)
-        if typeof(v)=="string" and v~="" then return v end
-    end
-    for _,name in ipairs({"Character","Moveset","SelectedCharacter","CurrentCharacter"}) do
-        local v = char:FindFirstChild(name) or LP:FindFirstChild(name)
-        if v then
-            if v:IsA("StringValue") and v.Value~="" then return v.Value end
-            if v:IsA("ObjectValue") and v.Value then return v.Value.Name end
+    for uid, h in pairs(S.highlights) do
+        if not alive[uid] then
+            pcall(function() h:Destroy() end)
+            S.highlights[uid] = nil
         end
     end
-    local tools={}
-    for _,t in ipairs(char:GetChildren()) do if t:IsA("Tool") then table.insert(tools,t.Name) end end
-    local bp=LP:FindFirstChild("Backpack")
-    if bp then for _,t in ipairs(bp:GetChildren()) do if t:IsA("Tool") then table.insert(tools,t.Name) end end end
-    local ts=table.concat(tools," "):lower()
-    if     ts:find("consecutive") or ts:find("serious")   then return "Saitama"
-    elseif ts:find("flowing")     or ts:find("hunter")    then return "Garou"
-    elseif ts:find("machine gun") or ts:find("ignition")  then return "Genos"
-    elseif ts:find("shuriken")    or ts:find("scatter")   then return "Sonic"
-    elseif ts:find("homerun")     or ts:find("beatdown")  then return "MetalBat"
-    elseif ts:find("atmos")       or ts:find("slice")     then return "Atomic"
-    elseif ts:find("windstorm")   or ts:find("coffin")    then return "Tatsumaki"
-    elseif ts:find("barrage")     or ts:find("vanishing") then return "Suiryu"
-    end
-    return "Unknown"
 end
 
--- ============================================================
--- TRUE COMBOS
--- ============================================================
-local CharCombos = {
-    Saitama = {
-        {type="m1",count=3,wait=0.07},
-        {type="key",key="Four", wait=0.55},
-        {type="key",key="Three",wait=0.50},
-        {type="dash",           wait=0.20},
-        {type="m1",count=3,wait=0.07},
-        {type="key",key="One",  wait=0.45},
-        {type="key",key="Two",  wait=0.65},
-        {type="m1",count=2,wait=0.07},
-    },
-    Garou = {
-        {type="dash",           wait=0.15},
-        {type="m1",count=3,wait=0.07},
-        {type="key",key="One",  wait=0.45},
-        {type="dash",           wait=0.15},
-        {type="key",key="Three",wait=0.50},
-        {type="dash",           wait=0.15},
-        {type="m1",count=3,wait=0.07},
-        {type="key",key="Two",  wait=0.50},
-        {type="key",key="Four", wait=0.40},
-    },
-    Genos = {
-        {type="m1",count=3,wait=0.07},
-        {type="key",key="One",  wait=0.35},
-        {type="key",key="Two",  wait=0.40},
-        {type="dash",           wait=0.15},
-        {type="m1",count=3,wait=0.07},
-        {type="key",key="Four", wait=0.45},
-        {type="key",key="Three",wait=0.40},
-    },
-    Sonic = {
-        {type="m1",count=4,wait=0.07},
-        {type="jump",           wait=0.10},
-        {type="key",key="One",  wait=0.40},
-        {type="m1",count=3,wait=0.07},
-        {type="key",key="Two",  wait=0.40},
-        {type="m1",count=3,wait=0.07},
-        {type="key",key="Four", wait=0.45},
-        {type="key",key="Three",wait=0.40},
-        {type="key",key="One",  wait=0.35},
-    },
-    MetalBat = {
-        {type="dash",           wait=0.15},
-        {type="m1",count=3,wait=0.07},
-        {type="key",key="Three",wait=0.45},
-        {type="key",key="One",  wait=0.50},
-        {type="key",key="Two",  wait=0.50},
-        {type="key",key="Four", wait=0.45},
-        {type="dash",           wait=0.15},
-        {type="m1",count=3,wait=0.07},
-        {type="key",key="Four", wait=0.45},
-    },
-    Atomic = {
-        {type="dash",           wait=0.15},
-        {type="m1",count=3,wait=0.07},
-        {type="key",key="Four", wait=0.45},
-        {type="key",key="One",  wait=0.45},
-        {type="key",key="Two",  wait=0.40},
-        {type="dash",           wait=0.15},
-        {type="m1",count=3,wait=0.07},
-        {type="key",key="Three",wait=0.40},
-    },
-    Tatsumaki = {
-        {type="m1",count=3,wait=0.07},
-        {type="key",key="Four", wait=0.45},
-        {type="key",key="One",  wait=0.50},
-        {type="m1",count=3,wait=0.07},
-        {type="key",key="Four", wait=0.45},
-        {type="key",key="Two",  wait=0.55},
-        {type="m1",count=3,wait=0.07},
-        {type="key",key="Three",wait=0.40},
-    },
-    Suiryu = {
-        {type="m1",count=3,wait=0.07},
-        {type="key",key="Four", wait=0.45},
-        {type="key",key="One",  wait=0.50},
-        {type="key",key="Two",  wait=0.35},
-        {type="key",key="Two",  wait=0.35},
-        {type="key",key="Four", wait=0.45},
-        {type="key",key="Three",wait=0.40},
-    },
-    Unknown = {
-        {type="m1",count=3,wait=0.07},
-        {type="key",key="One",  wait=0.45},
-        {type="m1",count=2,wait=0.07},
-        {type="key",key="Two",  wait=0.45},
-        {type="m1",count=2,wait=0.07},
-        {type="key",key="Three",wait=0.45},
-        {type="m1",count=2,wait=0.07},
-        {type="key",key="Four", wait=0.45},
-    },
-}
-
-local abilityCooldowns = {One=0,Two=0,Three=0,Four=0}
-local ABILITY_CD       = 0.9
-local currentChar      = "Unknown"
-local lastCharCheck    = 0
-
-local function getActiveCombo()
-    if tick()-lastCharCheck > 3 then
-        lastCharCheck = tick()
-        currentChar   = detectCharacter()
-    end
-    return CharCombos[currentChar] or CharCombos["Unknown"]
+local function hopServer()
+    if tick() - S.lastHop < 5 then return end
+    S.lastHop = tick()
+    S.currentTarget = nil
+    clearEsp()
+    pcall(function()
+        local pid = game.PlaceId
+        local servers = {}
+        local req = game:HttpGet(
+            "https://games.roblox.com/v1/games/" .. pid .. "/servers/Public?sortOrder=Asc&limit=100"
+        )
+        local data = HttpService:JSONDecode(req)
+        if data and data.data then
+            for _, srv in ipairs(data.data) do
+                if srv.playing and srv.playing < srv.maxPlayers and srv.id ~= game.JobId then
+                    table.insert(servers, srv.id)
+                end
+            end
+        end
+        if #servers > 0 then
+            TS:TeleportToPlaceInstance(pid, servers[math.random(1, #servers)], LP)
+        else
+            TS:Teleport(pid, LP)
+        end
+    end)
 end
 
 local comboRunning = false
-local function runCombo()
+local lastAbility = {}
+local function attackLoop(target)
     if comboRunning then return end
     comboRunning = true
     task.spawn(function()
-        for _,step in ipairs(getActiveCombo()) do
-            if step.type=="m1" then
-                for i=1,step.count do click() task.wait(step.wait) end
-            elseif step.type=="key" then
-                local now=tick()
-                if now-(abilityCooldowns[step.key] or 0)>=ABILITY_CD then
-                    pressKey(step.key) abilityCooldowns[step.key]=now
-                end
-                task.wait(step.wait)
-            elseif step.type=="dash" then
-                pressKey("Q") task.wait(step.wait)
-            elseif step.type=="jump" then
-                pressKey("Space") task.wait(step.wait)
+        for _ = 1, 4 do
+            if not S.farming or not target or not isAlive(target.char) then break end
+            aimStick(target)
+            doM1()
+            task.wait(0.12)
+        end
+        for _, key in ipairs({"One", "Two", "Three", "Four"}) do
+            if not S.farming then break end
+            if tick() - (lastAbility[key] or 0) > 0.9 then
+                pressKey(key)
+                lastAbility[key] = tick()
+                task.wait(0.15)
+                doM1()
+                task.wait(0.1)
             end
         end
+        pressKey("Q")
         task.wait(0.08)
         comboRunning = false
     end)
 end
 
--- ============================================================
--- KILL TRACKING
--- ============================================================
-local lastKnownKills = 0
-local function updateKills()
-    local ls = LP:FindFirstChild("leaderstats")
-    if not ls then return end
-    local kv = ls:FindFirstChild("Kills") or ls:FindFirstChild("kills") or ls:FindFirstChild("Kill")
-    if not kv then return end
-    if not (kv:IsA("IntValue") or kv:IsA("NumberValue")) then return end
-    local current = kv.Value
-    if not PZ.killsSeeded then lastKnownKills=current PZ.killsSeeded=true return end
-    if current > lastKnownKills then
-        local gained=current-lastKnownKills
-        PZ.kills=PZ.kills+gained lastKnownKills=current
-        notify("Gatito Hub","Kill +"..gained.." | Session: "..PZ.kills)
-        PZ.finishing=false PZ.currentTarget=nil
-    end
-end
-
--- ============================================================
--- SERVER HOP
--- ============================================================
-local function serverHop()
-    if tick()-PZ.lastHop < 8 then return end
-    PZ.lastHop=tick()
-    notify("Gatito Hub","Hopping after "..PZ.kills.." kills...")
-    PZ.kills=0 PZ.killsSeeded=false PZ.finishing=false PZ.currentTarget=nil
-    pcall(function()
-        local pid=game.PlaceId local servers={}
-        local req=game:HttpGet("https://games.roblox.com/v1/games/"..pid.."/servers/Public?sortOrder=Asc&limit=100")
-        local data=HttpService:JSONDecode(req)
-        if data and data.data then
-            for _,s in ipairs(data.data) do
-                if s.playing and s.playing<s.maxPlayers and s.id~=game.JobId then
-                    table.insert(servers,s.id)
-                end
-            end
-        end
-        if #servers>0 then TS:TeleportToPlaceInstance(pid,servers[math.random(1,#servers)],LP)
-        else TS:Teleport(pid,LP) end
-    end)
-end
-
--- ============================================================
--- MAIN LOOP
--- ============================================================
-LP.CharacterAdded:Connect(function()
-    task.wait(0.6)
-    PZ.killsSeeded=false PZ.finishing=false PZ.currentTarget=nil
-end)
-
 local function mainLoop()
-    if not PZ.autoFarm then return end
-    local myChar=LP.Character
-    if not myChar then return end
-    local myHum=getHum(myChar)
-    if not myHum or myHum.Health<=0 then return end
-    local target=pickTarget()
+    if not S.farming then return end
+    local myChar = LP.Character
+    if not myChar or not getHum(myChar) or getHum(myChar).Health <= 0 then return end
+    updateEsp()
+    local target = pickTarget()
     if target then
-        aimAt(target)
-        if not comboRunning then runCombo() end
-    end
-    if tick()-PZ.lastKillCheck > 1.0 then
-        PZ.lastKillCheck=tick()
-        updateKills()
-        if PZ.serverHop and PZ.kills>=PZ.targetKills then serverHop() end
+        S.noLowSince = tick()
+        aimStick(target)
+        attackLoop(target)
+    else
+        if tick() - S.noLowSince >= S.hopWait then
+            hopServer()
+            S.noLowSince = tick()
+        end
     end
 end
 
-PZ.conn = RS.Heartbeat:Connect(function() pcall(mainLoop) end)
-
--- ============================================================
--- GUI — Opera GX Mobile style
--- ============================================================
-local gui = Instance.new("ScreenGui")
-gui.Name           = "GatitoHub"
-gui.ResetOnSpawn   = false
-gui.IgnoreGuiInset = true
-gui.DisplayOrder   = 999
-pcall(function() gui.Parent = LP:WaitForChild("PlayerGui") end)
-PZ.gui = gui
-
--- Measurements
-local W,H = 340, 400
-
--- Main card
-local card = Instance.new("Frame")
-card.Name             = "Card"
-card.Size             = UDim2.new(0,W,0,H)
-card.Position         = UDim2.new(0.5,-W/2,0.5,-H/2)
-card.BackgroundColor3 = Color3.fromRGB(13,12,18)
-card.BackgroundTransparency = 0.12
-card.BorderSizePixel  = 0
-card.Active           = true
-card.Draggable        = true
-card.Parent           = gui
-local cardC = Instance.new("UICorner") cardC.CornerRadius=UDim.new(0,12) cardC.Parent=card
-local cardS = Instance.new("UIStroke") cardS.Color=Color3.fromRGB(0,200,80) cardS.Thickness=2.2 cardS.Parent=card
-
--- Card background image (rectangle)
-local cardBg = Instance.new("ImageLabel")
-cardBg.Name                 = "CardBg"
-cardBg.Size                 = UDim2.new(1,0,1,0)
-cardBg.Position             = UDim2.new(0,0,0,0)
-cardBg.BackgroundTransparency = 1
-cardBg.BorderSizePixel      = 0
-cardBg.Image                = "rbxassetid://6675147490"
-cardBg.ScaleType            = Enum.ScaleType.Crop
-cardBg.ImageTransparency    = 0.15
-cardBg.ZIndex               = 0
-cardBg.Parent               = card
-local cardBgC = Instance.new("UICorner") cardBgC.CornerRadius=UDim.new(0,12) cardBgC.Parent=cardBg
--- fallback if assetid fails to paint
-task.defer(function()
-    if cardBg.IsLoaded == false or cardBg.Image == "" then
-        cardBg.Image = "rbxthumb://type=Asset&id=6675147490&w=420&h=420"
-    end
+LP.CharacterAdded:Connect(function()
+    task.wait(0.8)
+    S.currentTarget = nil
+    comboRunning = false
+    clearEsp()
 end)
 
--- Top notch bar (Opera GX green accent at top)
-local notch = Instance.new("Frame")
-notch.Size             = UDim2.new(0,60,0,5)
-notch.Position         = UDim2.new(0.5,-30,0,-2)
-notch.BackgroundColor3 = Color3.fromRGB(0,200,80)
-notch.BorderSizePixel  = 0
-notch.Parent           = card
-local notchC = Instance.new("UICorner") notchC.CornerRadius=UDim.new(0,4) notchC.Parent=notch
-
--- ── Header area — cat picture as background ──────────────────
-local headerBg = Instance.new("Frame")
-headerBg.Size             = UDim2.new(1,0,0,130)
-headerBg.Position         = UDim2.new(0,0,0,0)
-headerBg.BackgroundColor3 = Color3.fromRGB(18,16,26)
-headerBg.BackgroundTransparency = 0.35
-headerBg.BorderSizePixel  = 0
-headerBg.ClipsDescendants = true
-headerBg.ZIndex             = 1
-headerBg.Parent           = card
-local headerBgC = Instance.new("UICorner") headerBgC.CornerRadius=UDim.new(0,12) headerBgC.Parent=headerBg
--- Square bottom corners on header
-local headerFix = Instance.new("Frame")
-headerFix.Size=UDim2.new(1,0,0,22) headerFix.Position=UDim2.new(0,0,1,-22)
-headerFix.BackgroundColor3=Color3.fromRGB(18,16,26) headerFix.BackgroundTransparency=0.35 headerFix.BorderSizePixel=0 headerFix.Parent=headerBg
-
--- Script logo
-local logo = Instance.new("ImageLabel")
-logo.Size                   = UDim2.new(0,88,0,88)
-logo.Position               = UDim2.new(0.5,-44,0,14)
-logo.BackgroundTransparency = 1
-logo.Image                  = "rbxthumb://type=Asset&id=11176073582&w=150&h=150"
-logo.ScaleType              = Enum.ScaleType.Fit
-logo.ImageTransparency      = 0
-logo.ZIndex                 = 2
-logo.Parent                 = headerBg
-
--- Site lock icon (🔒 style — small green dot)
-local lockDot = Instance.new("Frame")
-lockDot.Size=UDim2.new(0,8,0,8) lockDot.Position=UDim2.new(0.5,-38,1,-28)
-lockDot.BackgroundColor3=Color3.fromRGB(0,200,80) lockDot.BorderSizePixel=0 lockDot.Parent=headerBg
-local lockC=Instance.new("UICorner") lockC.CornerRadius=UDim.new(1,0) lockC.Parent=lockDot
-
--- Site title
-local siteTitle = Instance.new("TextLabel")
-siteTitle.Size=UDim2.new(1,-20,0,22) siteTitle.Position=UDim2.new(0,10,1,-44)
-siteTitle.BackgroundTransparency=1 siteTitle.Text="GATITO HUB"
-siteTitle.TextColor3=Color3.fromRGB(255,255,255) siteTitle.Font=Enum.Font.GothamBold
-siteTitle.TextSize=15 siteTitle.TextXAlignment=Enum.TextXAlignment.Center siteTitle.Parent=headerBg
-
--- Secure tag
-local secureTag = Instance.new("TextLabel")
-secureTag.Size=UDim2.new(1,-20,0,16) secureTag.Position=UDim2.new(0,10,1,-24)
-secureTag.BackgroundTransparency=1 secureTag.Text="Your connection is secure"
-secureTag.TextColor3=Color3.fromRGB(140,140,160) secureTag.Font=Enum.Font.Gotham
-secureTag.TextSize=11 secureTag.TextXAlignment=Enum.TextXAlignment.Center secureTag.Parent=headerBg
-
--- ── Nav button row ────────────────────────────────────────────
-local navRow = Instance.new("Frame")
-navRow.Size=UDim2.new(1,-24,0,52) navRow.Position=UDim2.new(0,12,0,138)
-navRow.BackgroundTransparency=1 navRow.Parent=card
-
-local navButtons = {
-    {icon="←", tip="Back"},
-    {icon="→", tip="Forward"},
-    {icon="↺", tip="Reload"},
-    {icon="⇪", tip="Share"},
-    {icon="♡", tip="Favourite"},
-}
-local navBtnW = (W-24-8*4)/5
-for i,nb in ipairs(navButtons) do
-    local btn = Instance.new("TextButton")
-    btn.Size=UDim2.new(0,navBtnW,0,46) btn.Position=UDim2.new(0,(navBtnW+8)*(i-1),0,0)
-    btn.BackgroundColor3=Color3.fromRGB(28,24,42) btn.Text=nb.icon
-    btn.TextColor3=Color3.fromRGB(210,200,240) btn.Font=Enum.Font.GothamBold
-    btn.TextSize=18 btn.BorderSizePixel=0 btn.Parent=navRow
-    local bc=Instance.new("UICorner") bc.CornerRadius=UDim.new(0,10) bc.Parent=btn
+-- ============================================================
+-- CUSTOM GUI (black + RGB border · adaptive · scrollable)
+-- ============================================================
+local function parentGui()
+    local ok, hui = pcall(function() return gethui and gethui() end)
+    if ok and hui then return hui end
+    local ok2 = pcall(function()
+        local t = Instance.new("Folder")
+        t.Parent = game:GetService("CoreGui")
+        t:Destroy()
+    end)
+    if ok2 then return game:GetService("CoreGui") end
+    return LP:WaitForChild("PlayerGui")
 end
 
--- ── Divider ───────────────────────────────────────────────────
-local div = Instance.new("Frame")
-div.Size=UDim2.new(1,-24,0,1) div.Position=UDim2.new(0,12,0,196)
-div.BackgroundColor3=Color3.fromRGB(38,35,55) div.BorderSizePixel=0 div.Parent=card
+local function rgbStroke(parent, thickness)
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = thickness or 2
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    stroke.Parent = parent
+    local hue = 0
+    local conn
+    conn = RS.RenderStepped:Connect(function(dt)
+        if not stroke.Parent then
+            if conn then conn:Disconnect() end
+            return
+        end
+        hue = (hue + dt * 0.35) % 1
+        stroke.Color = Color3.fromHSV(hue, 1, 1)
+    end)
+    return stroke, conn
+end
 
--- ── Toggle factory — Opera GX style ─────────────────────────
-local function makeToggle(yPos, labelText, defaultOn, callback)
+local function makeCorner(parent, r)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, r or 10)
+    c.Parent = parent
+    return c
+end
+
+local Gui = Instance.new("ScreenGui")
+Gui.Name = "GatitoHub"
+Gui.ResetOnSpawn = false
+Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+Gui.IgnoreGuiInset = true
+Gui.Parent = parentGui()
+S.gui = Gui
+
+-- adaptive size
+local isMobile = UIS.TouchEnabled and not UIS.KeyboardEnabled
+local mainW = isMobile and 300 or 340
+local mainH = isMobile and 380 or 420
+local iconSize = isMobile and 52 or 48
+
+-- minimized cube icon (always visible, starts closed)
+local IconBtn = Instance.new("ImageButton")
+IconBtn.Name = "GatitoIcon"
+IconBtn.Size = UDim2.fromOffset(iconSize, iconSize)
+IconBtn.Position = UDim2.new(0, 14, 0.5, -iconSize / 2)
+IconBtn.BackgroundColor3 = Color3.fromRGB(12, 12, 14)
+IconBtn.BackgroundTransparency = 0.15
+IconBtn.Image = "rbxassetid://10824339341"
+IconBtn.ScaleType = Enum.ScaleType.Fit
+IconBtn.AutoButtonColor = false
+IconBtn.ZIndex = 50
+IconBtn.Parent = Gui
+makeCorner(IconBtn, 10)
+local _, iconRgbConn = rgbStroke(IconBtn, 2.5)
+S.rgbConn = iconRgbConn
+
+-- main window (hidden at start)
+local Main = Instance.new("Frame")
+Main.Name = "Main"
+Main.Size = UDim2.fromOffset(mainW, mainH)
+Main.Position = UDim2.new(0, 14 + iconSize + 10, 0.5, -mainH / 2)
+Main.BackgroundColor3 = Color3.fromRGB(8, 8, 10)
+Main.BackgroundTransparency = 0.4 -- ~60% visible / translucent
+Main.BorderSizePixel = 0
+Main.Visible = false
+Main.ClipsDescendants = true
+Main.ZIndex = 40
+Main.Parent = Gui
+makeCorner(Main, 12)
+rgbStroke(Main, 2)
+
+-- header
+local Header = Instance.new("Frame")
+Header.Size = UDim2.new(1, 0, 0, 44)
+Header.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+Header.BackgroundTransparency = 0.25
+Header.BorderSizePixel = 0
+Header.ZIndex = 41
+Header.Parent = Main
+makeCorner(Header, 12)
+
+local HeaderFix = Instance.new("Frame")
+HeaderFix.Size = UDim2.new(1, 0, 0, 14)
+HeaderFix.Position = UDim2.new(0, 0, 1, -14)
+HeaderFix.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+HeaderFix.BackgroundTransparency = 0.25
+HeaderFix.BorderSizePixel = 0
+HeaderFix.ZIndex = 41
+HeaderFix.Parent = Header
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, -50, 1, 0)
+Title.Position = UDim2.fromOffset(12, 0)
+Title.BackgroundTransparency = 1
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = isMobile and 13 or 14
+Title.TextColor3 = Color3.fromRGB(240, 240, 245)
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Text = "Gatito Hub By @Hanako899 (on YT)"
+Title.ZIndex = 42
+Title.Parent = Header
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.fromOffset(28, 28)
+CloseBtn.Position = UDim2.new(1, -36, 0.5, -14)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 36)
+CloseBtn.BackgroundTransparency = 0.2
+CloseBtn.Text = "×"
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 18
+CloseBtn.TextColor3 = Color3.fromRGB(220, 220, 230)
+CloseBtn.AutoButtonColor = false
+CloseBtn.ZIndex = 42
+CloseBtn.Parent = Header
+makeCorner(CloseBtn, 6)
+
+-- scroll body
+local Scroll = Instance.new("ScrollingFrame")
+Scroll.Size = UDim2.new(1, -12, 1, -52)
+Scroll.Position = UDim2.fromOffset(6, 48)
+Scroll.BackgroundTransparency = 1
+Scroll.BorderSizePixel = 0
+Scroll.ScrollBarThickness = 4
+Scroll.ScrollBarImageColor3 = Color3.fromRGB(180, 180, 200)
+Scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+Scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+Scroll.ZIndex = 41
+Scroll.Parent = Main
+
+local List = Instance.new("UIListLayout")
+List.Padding = UDim.new(0, 8)
+List.SortOrder = Enum.SortOrder.LayoutOrder
+List.Parent = Scroll
+
+local Pad = Instance.new("UIPadding")
+Pad.PaddingTop = UDim.new(0, 4)
+Pad.PaddingBottom = UDim.new(0, 12)
+Pad.PaddingLeft = UDim.new(0, 4)
+Pad.PaddingRight = UDim.new(0, 4)
+Pad.Parent = Scroll
+
+local function sectionLabel(text, order)
+    local f = Instance.new("TextLabel")
+    f.Size = UDim2.new(1, -8, 0, 18)
+    f.BackgroundTransparency = 1
+    f.Font = Enum.Font.GothamBold
+    f.TextSize = 11
+    f.TextColor3 = Color3.fromRGB(140, 140, 160)
+    f.TextXAlignment = Enum.TextXAlignment.Left
+    f.Text = text
+    f.LayoutOrder = order
+    f.ZIndex = 42
+    f.Parent = Scroll
+    return f
+end
+
+local function makeToggle(name, default, order, callback)
     local row = Instance.new("Frame")
-    row.Size=UDim2.new(1,-24,0,52) row.Position=UDim2.new(0,12,0,yPos)
-    row.BackgroundTransparency=1 row.Parent=card
+    row.Size = UDim2.new(1, -8, 0, 36)
+    row.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+    row.BackgroundTransparency = 0.25
+    row.BorderSizePixel = 0
+    row.LayoutOrder = order
+    row.ZIndex = 42
+    row.Parent = Scroll
+    makeCorner(row, 8)
 
     local lbl = Instance.new("TextLabel")
-    lbl.Size=UDim2.new(1,-74,1,0) lbl.Position=UDim2.new(0,0,0,0)
-    lbl.BackgroundTransparency=1 lbl.Text=labelText
-    lbl.TextColor3=Color3.fromRGB(240,240,240) lbl.Font=Enum.Font.GothamBold
-    lbl.TextSize=15 lbl.TextXAlignment=Enum.TextXAlignment.Left lbl.Parent=row
+    lbl.Size = UDim2.new(1, -60, 1, 0)
+    lbl.Position = UDim2.fromOffset(12, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextSize = 13
+    lbl.TextColor3 = Color3.fromRGB(230, 230, 240)
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Text = name
+    lbl.ZIndex = 43
+    lbl.Parent = row
 
-    -- Pill
-    local pill = Instance.new("Frame")
-    pill.Size=UDim2.new(0,56,0,30) pill.Position=UDim2.new(1,-56,0.5,-15)
-    pill.BackgroundColor3 = defaultOn and Color3.fromRGB(0,180,70) or Color3.fromRGB(55,52,72)
-    pill.BorderSizePixel=0 pill.Parent=row
-    local pillC=Instance.new("UICorner") pillC.CornerRadius=UDim.new(1,0) pillC.Parent=pill
-
-    -- Knob
-    local knob = Instance.new("Frame")
-    knob.Size=UDim2.new(0,24,0,24)
-    knob.Position = defaultOn and UDim2.new(0,29,0,3) or UDim2.new(0,3,0,3)
-    knob.BackgroundColor3=Color3.fromRGB(255,255,255) knob.BorderSizePixel=0 knob.Parent=pill
-    local knobC=Instance.new("UICorner") knobC.CornerRadius=UDim.new(1,0) knobC.Parent=knob
-
-    -- Click region over pill
+    local state = default and true or false
     local btn = Instance.new("TextButton")
-    btn.Size=UDim2.new(0,56,0,30) btn.Position=UDim2.new(1,-56,0.5,-15)
-    btn.BackgroundTransparency=1 btn.Text="" btn.Parent=row
+    btn.Size = UDim2.fromOffset(42, 22)
+    btn.Position = UDim2.new(1, -50, 0.5, -11)
+    btn.BackgroundColor3 = state and Color3.fromRGB(60, 200, 100) or Color3.fromRGB(50, 50, 58)
+    btn.Text = ""
+    btn.AutoButtonColor = false
+    btn.ZIndex = 43
+    btn.Parent = row
+    makeCorner(btn, 11)
 
-    local state = defaultOn
+    local knob = Instance.new("Frame")
+    knob.Size = UDim2.fromOffset(18, 18)
+    knob.Position = state and UDim2.new(1, -20, 0.5, -9) or UDim2.fromOffset(2, 2)
+    knob.BackgroundColor3 = Color3.fromRGB(245, 245, 250)
+    knob.BorderSizePixel = 0
+    knob.ZIndex = 44
+    knob.Parent = btn
+    makeCorner(knob, 9)
+
     btn.MouseButton1Click:Connect(function()
         state = not state
-        pill.BackgroundColor3 = state and Color3.fromRGB(0,180,70) or Color3.fromRGB(55,52,72)
-        knob.Position         = state and UDim2.new(0,29,0,3) or UDim2.new(0,3,0,3)
-        callback(state)
+        btn.BackgroundColor3 = state and Color3.fromRGB(60, 200, 100) or Color3.fromRGB(50, 50, 58)
+        TweenService:Create(knob, TweenInfo.new(0.15), {
+            Position = state and UDim2.new(1, -20, 0.5, -9) or UDim2.fromOffset(2, 2)
+        }):Play()
+        if callback then callback(state) end
+        saveConfig()
+    end)
+    return function() return state end
+end
+
+local function makeSlider(name, minV, maxV, default, order, callback)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, -8, 0, 48)
+    row.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+    row.BackgroundTransparency = 0.25
+    row.BorderSizePixel = 0
+    row.LayoutOrder = order
+    row.ZIndex = 42
+    row.Parent = Scroll
+    makeCorner(row, 8)
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(0.7, 0, 0, 18)
+    lbl.Position = UDim2.fromOffset(12, 4)
+    lbl.BackgroundTransparency = 1
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextSize = 12
+    lbl.TextColor3 = Color3.fromRGB(220, 220, 230)
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Text = name
+    lbl.ZIndex = 43
+    lbl.Parent = row
+
+    local valLbl = Instance.new("TextLabel")
+    valLbl.Size = UDim2.new(0.3, -12, 0, 18)
+    valLbl.Position = UDim2.new(0.7, 0, 0, 4)
+    valLbl.BackgroundTransparency = 1
+    valLbl.Font = Enum.Font.GothamBold
+    valLbl.TextSize = 12
+    valLbl.TextColor3 = Color3.fromRGB(180, 180, 200)
+    valLbl.TextXAlignment = Enum.TextXAlignment.Right
+    valLbl.Text = tostring(default)
+    valLbl.ZIndex = 43
+    valLbl.Parent = row
+
+    local barBg = Instance.new("Frame")
+    barBg.Size = UDim2.new(1, -24, 0, 6)
+    barBg.Position = UDim2.fromOffset(12, 30)
+    barBg.BackgroundColor3 = Color3.fromRGB(40, 40, 48)
+    barBg.BorderSizePixel = 0
+    barBg.ZIndex = 43
+    barBg.Parent = row
+    makeCorner(barBg, 3)
+
+    local fill = Instance.new("Frame")
+    local pct = (default - minV) / (maxV - minV)
+    fill.Size = UDim2.new(pct, 0, 1, 0)
+    fill.BackgroundColor3 = Color3.fromRGB(100, 140, 255)
+    fill.BorderSizePixel = 0
+    fill.ZIndex = 44
+    fill.Parent = barBg
+    makeCorner(fill, 3)
+
+    local dragging = false
+    local function setFromX(x)
+        local rel = math.clamp((x - barBg.AbsolutePosition.X) / barBg.AbsoluteSize.X, 0, 1)
+        local v = minV + (maxV - minV) * rel
+        if maxV - minV > 5 then v = math.floor(v + 0.5) else v = math.floor(v * 10 + 0.5) / 10 end
+        fill.Size = UDim2.new(rel, 0, 1, 0)
+        valLbl.Text = tostring(v)
+        if callback then callback(v) end
+        saveConfig()
+    end
+
+    barBg.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            setFromX(input.Position.X)
+        end
+    end)
+    UIS.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+    UIS.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch) then
+            setFromX(input.Position.X)
+        end
     end)
 end
 
-makeToggle(204, "Auto Farm Kills", true, function(on)
-    PZ.autoFarm = on
-    notify("Gatito Hub", "Auto Farm: "..(on and "ON" or "OFF"))
+local function makeButton(name, order, callback)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, -8, 0, 34)
+    btn.BackgroundColor3 = Color3.fromRGB(28, 28, 34)
+    btn.BackgroundTransparency = 0.15
+    btn.BorderSizePixel = 0
+    btn.Font = Enum.Font.GothamMedium
+    btn.TextSize = 13
+    btn.TextColor3 = Color3.fromRGB(235, 235, 245)
+    btn.Text = name
+    btn.AutoButtonColor = false
+    btn.LayoutOrder = order
+    btn.ZIndex = 42
+    btn.Parent = Scroll
+    makeCorner(btn, 8)
+    btn.MouseButton1Click:Connect(function()
+        if callback then callback() end
+    end)
+end
+
+sectionLabel("COMBAT", 1)
+makeToggle("Auto Farm Low HP", S.farming, 2, function(v)
+    S.farming = v
+    S.noLowSince = tick()
+end)
+makeSlider("Low HP %", 10, 80, math.floor(S.lowHpPct * 100), 3, function(v)
+    S.lowHpPct = v / 100
+end)
+makeSlider("Hop Wait (s)", 5, 60, S.hopWait, 4, function(v)
+    S.hopWait = v
+end)
+makeSlider("Stick Distance", 1, 6, S.stickDist, 5, function(v)
+    S.stickDist = v
+end)
+makeButton("Force Server Hop", 6, function()
+    hopServer()
 end)
 
--- Divider between toggles
-local div2 = Instance.new("Frame")
-div2.Size=UDim2.new(1,-24,0,1) div2.Position=UDim2.new(0,12,0,261)
-div2.BackgroundColor3=Color3.fromRGB(38,35,55) div2.BorderSizePixel=0 div2.Parent=card
+sectionLabel("INFO", 7)
+local info = Instance.new("TextLabel")
+info.Size = UDim2.new(1, -8, 0, 72)
+info.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+info.BackgroundTransparency = 0.3
+info.BorderSizePixel = 0
+info.Font = Enum.Font.Gotham
+info.TextSize = 11
+info.TextColor3 = Color3.fromRGB(170, 170, 185)
+info.TextXAlignment = Enum.TextXAlignment.Left
+info.TextYAlignment = Enum.TextYAlignment.Top
+info.TextWrapped = true
+info.Text = "Only targets under Low HP %.\nRed ESP on low-HP players.\nNo targets for hop-wait → server hop.\ndiscord.gg/CeZkUZ6Uwy"
+info.LayoutOrder = 8
+info.ZIndex = 42
+info.Parent = Scroll
+makeCorner(info, 8)
+local infoPad = Instance.new("UIPadding")
+infoPad.PaddingTop = UDim.new(0, 8)
+infoPad.PaddingLeft = UDim.new(0, 10)
+infoPad.PaddingRight = UDim.new(0, 8)
+infoPad.Parent = info
 
-makeToggle(268, "Server Hop", true, function(on)
-    PZ.serverHop = on
-    notify("Gatito Hub", "Server Hop: "..(on and "ON" or "OFF"))
+-- open / close
+local function setOpen(v)
+    S.open = v
+    Main.Visible = v
+end
+
+IconBtn.MouseButton1Click:Connect(function()
+    setOpen(not S.open)
+end)
+CloseBtn.MouseButton1Click:Connect(function()
+    setOpen(false)
 end)
 
--- ── Bottom divider + footer stats ────────────────────────────
-local div3 = Instance.new("Frame")
-div3.Size=UDim2.new(1,-24,0,1) div3.Position=UDim2.new(0,12,0,328)
-div3.BackgroundColor3=Color3.fromRGB(38,35,55) div3.BorderSizePixel=0 div3.Parent=card
-
-local pingLbl = Instance.new("TextLabel")
-pingLbl.Size=UDim2.new(0.5,-16,0,28) pingLbl.Position=UDim2.new(0,12,0,335)
-pingLbl.BackgroundTransparency=1 pingLbl.Text="Ping: --ms"
-pingLbl.TextColor3=Color3.fromRGB(120,120,140) pingLbl.Font=Enum.Font.Gotham
-pingLbl.TextSize=12 pingLbl.TextXAlignment=Enum.TextXAlignment.Left pingLbl.Parent=card
-
-local fpsLbl = Instance.new("TextLabel")
-fpsLbl.Size=UDim2.new(0.5,-16,0,28) fpsLbl.Position=UDim2.new(0.5,4,0,335)
-fpsLbl.BackgroundTransparency=1 fpsLbl.Text="FPS: --"
-fpsLbl.TextColor3=Color3.fromRGB(120,120,140) fpsLbl.Font=Enum.Font.Gotham
-fpsLbl.TextSize=12 fpsLbl.TextXAlignment=Enum.TextXAlignment.Right fpsLbl.Parent=card
-
-local killLbl = Instance.new("TextLabel")
-killLbl.Size=UDim2.new(1,-24,0,24) killLbl.Position=UDim2.new(0,12,0,360)
-killLbl.BackgroundTransparency=1 killLbl.Text="Session kills: 0"
-killLbl.TextColor3=Color3.fromRGB(100,100,120) killLbl.Font=Enum.Font.Gotham
-killLbl.TextSize=11 killLbl.TextXAlignment=Enum.TextXAlignment.Center killLbl.Parent=card
-
--- Live stats updater
-local lastFPSTime = tick()
-local frameCount  = 0
-RS.Heartbeat:Connect(function()
-    pcall(function()
-        frameCount = frameCount+1
-        local now  = tick()
-        if now-lastFPSTime >= 1 then
-            local fps   = math.floor(frameCount/(now-lastFPSTime))
-            frameCount  = 0
-            lastFPSTime = now
-            local ping  = 0
-            pcall(function()
-                ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue())
+-- drag main (header)
+do
+    local dragging, startPos, dragStart
+    Header.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = Main.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
             end)
-            local pCol = ping<80 and Color3.fromRGB(0,200,80)
-                or ping<160 and Color3.fromRGB(220,180,50)
-                or Color3.fromRGB(220,70,70)
-            local fCol = fps>=50 and Color3.fromRGB(0,200,80)
-                or fps>=25 and Color3.fromRGB(220,180,50)
-                or Color3.fromRGB(220,70,70)
-            pingLbl.Text=("Ping: %dms"):format(ping) pingLbl.TextColor3=pCol
-            fpsLbl.Text=("FPS: %d"):format(fps)      fpsLbl.TextColor3=fCol
-            killLbl.Text="Session kills: "..PZ.kills
         end
     end)
+    UIS.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch) then
+            local d = input.Position - dragStart
+            Main.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + d.X,
+                startPos.Y.Scale, startPos.Y.Offset + d.Y
+            )
+        end
+    end)
+end
+
+-- optional main image strip (asset)
+pcall(function()
+    local banner = Instance.new("ImageLabel")
+    banner.Size = UDim2.new(1, -8, 0, 70)
+    banner.BackgroundTransparency = 1
+    banner.Image = "rbxassetid://99812885952150"
+    banner.ScaleType = Enum.ScaleType.Crop
+    banner.LayoutOrder = 0
+    banner.ZIndex = 42
+    banner.Parent = Scroll
+    makeCorner(banner, 8)
 end)
 
-notify("Gatito Hub", "😺 Auto farming active!")
+-- ============================================================
+-- CUSTOM NOTIFICATION (5s + underline shrink)
+-- ============================================================
+local NotifGui = Instance.new("ScreenGui")
+NotifGui.Name = "GatitoNotif"
+NotifGui.ResetOnSpawn = false
+NotifGui.IgnoreGuiInset = true
+NotifGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+NotifGui.Parent = parentGui()
+S.notifGui = NotifGui
 
--- Chat load message
-pcall(function()
-    local TextChat = game:GetService("TextChatService")
-    local channels = TextChat:FindFirstChild("TextChannels")
-    local channel = channels and (channels:FindFirstChild("RBXGeneral") or channels:FindFirstChild("RBXSystem"))
-    if channel and channel.SendAsync then
-        channel:SendAsync("Gatito Hub Loaded|TSB Auto Kill")
-    else
-        local RS = game:GetService("ReplicatedStorage")
-        local rem = RS:FindFirstChild("DefaultChatSystemChatEvents")
-        if rem and rem:FindFirstChild("SayMessageRequest") then
-            rem.SayMessageRequest:FireServer("Gatito Hub Loaded|TSB Auto Kill", "All")
+local Notif = Instance.new("Frame")
+Notif.Size = UDim2.fromOffset(isMobile and 280 or 320, 64)
+Notif.Position = UDim2.new(0.5, -(isMobile and 140 or 160), 0, 24)
+Notif.BackgroundColor3 = Color3.fromRGB(10, 10, 12)
+Notif.BackgroundTransparency = 0.15
+Notif.BorderSizePixel = 0
+Notif.ZIndex = 100
+Notif.Parent = NotifGui
+makeCorner(Notif, 10)
+rgbStroke(Notif, 1.5)
+
+local nTitle = Instance.new("TextLabel")
+nTitle.Size = UDim2.new(1, -16, 0, 20)
+nTitle.Position = UDim2.fromOffset(10, 8)
+nTitle.BackgroundTransparency = 1
+nTitle.Font = Enum.Font.GothamBold
+nTitle.TextSize = 13
+nTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+nTitle.TextXAlignment = Enum.TextXAlignment.Left
+nTitle.Text = "Gatito Hub"
+nTitle.ZIndex = 101
+nTitle.Parent = Notif
+
+local nMsg = Instance.new("TextLabel")
+nMsg.Size = UDim2.new(1, -16, 0, 22)
+nMsg.Position = UDim2.fromOffset(10, 28)
+nMsg.BackgroundTransparency = 1
+nMsg.Font = Enum.Font.Gotham
+nMsg.TextSize = 12
+nMsg.TextColor3 = Color3.fromRGB(200, 200, 210)
+nMsg.TextXAlignment = Enum.TextXAlignment.Left
+nMsg.TextWrapped = true
+nMsg.Text = "Click the minimized icon to open main GUI and turn on toggles!"
+nMsg.ZIndex = 101
+nMsg.Parent = Notif
+
+local under = Instance.new("Frame")
+under.Size = UDim2.new(1, -4, 0, 3)
+under.Position = UDim2.new(0, 2, 1, -5)
+under.BackgroundColor3 = Color3.fromRGB(100, 160, 255)
+under.BorderSizePixel = 0
+under.ZIndex = 102
+under.Parent = Notif
+makeCorner(under, 2)
+
+task.spawn(function()
+    local t = TweenService:Create(under, TweenInfo.new(5, Enum.EasingStyle.Linear), {
+        Size = UDim2.new(0, 0, 0, 3)
+    })
+    t:Play()
+    t.Completed:Wait()
+    local fade = TweenService:Create(Notif, TweenInfo.new(0.35), { BackgroundTransparency = 1 })
+    for _, ch in ipairs(Notif:GetDescendants()) do
+        if ch:IsA("TextLabel") then
+            TweenService:Create(ch, TweenInfo.new(0.35), { TextTransparency = 1 }):Play()
+        elseif ch:IsA("UIStroke") then
+            TweenService:Create(ch, TweenInfo.new(0.35), { Transparency = 1 }):Play()
+        elseif ch:IsA("Frame") and ch ~= Notif then
+            TweenService:Create(ch, TweenInfo.new(0.35), { BackgroundTransparency = 1 }):Play()
         end
     end
+    fade:Play()
+    fade.Completed:Wait()
+    NotifGui:Destroy()
+    S.notifGui = nil
+end)
+
+-- boot farm loop
+S.conn = RS.Heartbeat:Connect(function()
+    pcall(mainLoop)
 end)
